@@ -1,43 +1,75 @@
 import os
-from flask import Flask, render_template_string, request, Response, stream_with_context
+from flask import Flask, request, Response, stream_with_context
 import requests
 
-app = Flask(__name__)
+app = Flask(name)
 
-# বোট টোকেনটি এখানে সরাসরি বা এনভায়রনমেন্ট থেকে সেট করা হলো
 BOT_TOKEN = "8466409837:AAGBFHvpuUNdIzMev8k2MuCR_1RFxw2dhWE"
+TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+DOMAIN = "https://ht-tahsan-movie-1.onrender.com"
 
+# হোমপেজ
 @app.route("/")
 def home():
-    return "Telegram Video Downloader System is running successfully!"
+    return "<h1>Telegram Direct Downloader Bot is Active!</h1><p>Send a video to the Telegram bot to get a direct download link.</p>"
 
-@app.route("/download/<file_id>")
-def download_video(file_id):
-    try:
-        # ১. টেলিগ্রাম API থেকে ফাইলের পাথ বা লিংক বের করা
-        file_info_url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile?file_id={file_id}"
-        response = requests.get(file_info_url)
-        res_data = response.json()
-
-        if not res_data.get("ok"):
-            return "Error: Invalid File ID or Bot cannot access the file.", 400
-
-        file_path = res_data["result"]["file_path"]
+# বোটে মেসেজ বা ভিডিও আসলে এটি কাজ করবে
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
         
-        # ২. টেলিগ্রাম সার্ভার থেকে সরাসরি ভিডিও ডাউনলোড লিংক তৈরি
+        # যদি ইউজার কোনো ভিডিও পাঠায়
+        if "video" in data["message"]:
+            file_id = data["message"]["video"]["file_id"]
+            download_link = f"{DOMAIN}/dl/{file_id}"
+            
+            msg_text = f"✅ আপনার ডাইরেক্ট ডাউনলোড লিংক তৈরি হয়েছে:\n\n🔗 {download_link}\n\nএই লিংকে ক্লিক করলেই ব্রাউজারে অটোমেটিক ডাউনলোড শুরু হয়ে যাবে।"
+            
+            # ইউজারকে লিংক পাঠিয়ে দেওয়া
+            requests.post(f"{TELEGRAM_API}/sendMessage", json={
+                "chat_id": chat_id,
+                "text": msg_text,
+                "parse_mode": "Markdown"
+            })
+            
+        # যদি ইউজার নরমাল টেক্সট বা /start দেয়
+        elif "text" in data["message"]:
+            requests.post(f"{TELEGRAM_API}/sendMessage", json={
+                "chat_id": chat_id,
+                "text": "👋 হ্যালো! যেকোনো ভিডিও আমাকে ফরোয়ার্ড করুন, আমি আপনাকে ডাইরেক্ট ডাউনলোড লিংক বানিয়ে দেব।"
+            })
+
+    return "OK", 200
+
+# সরাসরি ফাইল ডাউনলোডের রাউট (/dl/FILE_ID)
+@app.route("/dl/<file_id>")
+def direct_download(file_id):
+    try:
+        # ফাইল পাথ নেওয়া
+        res = requests.get(f"{TELEGRAM_API}/getFile?file_id={file_id}").json()
+        if not res.get("ok"):
+            return "Error: File not found or Bot cannot access it.", 400
+
+        file_path = res["result"]["file_path"]
         download_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
 
-        # ৩. ব্রাউজারে স্ট্রিম করে ভিডিও ডাউনলোড করার ব্যবস্থা করা
+        # ফাইল স্ট্রিম করে ডাউনলোড করানো
         req = requests.get(download_url, stream=True)
         
         def generate():
-            for chunk in req.iter_content(chunk_size=4096):
+            for chunk in req.iter_content(chunk_size=8192):
                 yield chunk
 
-        return Response(stream_with_context(generate()), content_type=req.headers.get("content-type", "video/mp4"))
-
+        return Response(
+            stream_with_context(generate()),
+            content_type="application/octet-stream",
+            headers={"Content-Disposition": f"attachment; filename=Telegram_Video_{file_id[:6]}.mp4"}
+        )
     except Exception as e:
-        return f"An error occurred: {str(e)}"
+        return f"Download Error: {str(e)}"
 
-if __name__ == "__main__":
+if name == "main":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
